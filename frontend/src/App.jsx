@@ -301,7 +301,7 @@ function App() {
         
         {/* Created by credit - bottom right */}
         <div className="fixed bottom-4 right-4 text-xs text-green-800 pointer-events-none select-none">
-          Created by Abhishek
+          Developed by Abhishek
         </div>
       </div>
     </div>

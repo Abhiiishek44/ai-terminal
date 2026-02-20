@@ -41,7 +41,6 @@ class ExecutorService:
         else:
             cwd = os.path.abspath(os.path.expanduser(cwd))
         
-        # Ensure directory exists
         if not os.path.exists(cwd):
             cwd = os.getcwd()
         

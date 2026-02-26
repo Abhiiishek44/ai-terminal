@@ -1,0 +1,37 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install minimal system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        libssl-dev \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the core module
+COPY core ./core
+
+# Copy backend application files
+COPY backend/*.py ./
+COPY backend/routers ./routers
+COPY backend/services ./services
+COPY backend/models ./models
+COPY backend/utils ./utils
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8001/ || exit 1
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001"]
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001"]

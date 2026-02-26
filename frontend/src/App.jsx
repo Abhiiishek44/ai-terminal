@@ -17,15 +17,15 @@ function App() {
       try {
         // Make a simple request to get the current directory
         const response = await axios.post(
-          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_RUN}`,
+          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_EXECUTE}`,
           {
-            input: 'pwd',
-            execute: false,
-            context: { os: window.electronAPI?.platform || 'linux', shell: 'bash' }
+            command: 'pwd',
+            cwd: cwd
           }
         )
         
         // Set CWD from response or default to ~
+        console.log('Initial CWD response:', response.data)
         if (response.data?.new_cwd) {
           setCwd(response.data.new_cwd)
         } else {

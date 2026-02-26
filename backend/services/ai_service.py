@@ -130,7 +130,7 @@ Output:
 
 Input: "change to documents folder"
 Output:
-{{
+{{execute
   "intent": "file_operation",
   "command": "cd ~/Documents",
   "explanation": "Change to Documents directory",

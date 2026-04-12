@@ -10,6 +10,59 @@ function App() {
   const [cwd, setCwd] = useState('') // Current working directory
   const terminalRef = useRef(null)
   const inputRef = useRef(null)
+  const activeRequestControllerRef = useRef(null)
+
+  const normalizeCommandInput = (value) => {
+    const trimmed = value.trim()
+    if (trimmed === 'cd..') return 'cd ..'
+    if (/^cd\.\.(\s|$)/i.test(trimmed)) {
+      return trimmed.replace(/^cd\.\./i, 'cd ..')
+    }
+    return trimmed
+  }
+
+  const isDirectShellCommand = (value) => {
+    const directCommands = [
+      'ls', 'pwd', 'cd', 'mkdir', 'touch', 'cat', 'echo', 'cp', 'mv', 'rm',
+      'find', 'grep', 'head', 'tail', 'which', 'whoami', 'python', 'pip',
+      'npm', 'node', 'git', 'docker', 'docker-compose', 'pnpm', 'yarn', 'make'
+    ]
+
+    const normalized = normalizeCommandInput(value)
+    const commandWord = normalized.split(' ')[0].toLowerCase()
+    return directCommands.includes(commandWord)
+  }
+
+  const getExecutionOutput = (executionResult) => {
+    if (!executionResult) {
+      return { stdout: '', stderr: '' }
+    }
+
+    // Direct execute endpoint shape
+    if (typeof executionResult.stdout === 'string' || typeof executionResult.stderr === 'string') {
+      return {
+        stdout: executionResult.stdout || '',
+        stderr: executionResult.stderr || ''
+      }
+    }
+
+    // Planned execution shape: { success, results: [{ stdout, stderr, ... }] }
+    if (Array.isArray(executionResult.results)) {
+      const stdout = executionResult.results
+        .map(step => step?.stdout || '')
+        .filter(Boolean)
+        .join('\n')
+
+      const stderr = executionResult.results
+        .map(step => step?.stderr || '')
+        .filter(Boolean)
+        .join('\n')
+
+      return { stdout, stderr }
+    }
+
+    return { stdout: '', stderr: '' }
+  }
 
   // Fetch initial CWD when component mounts
   useEffect(() => {
@@ -61,35 +114,35 @@ function App() {
     if (e.key === 'Enter' && !loading && input.trim()) {
       e.preventDefault()
       const userInput = input.trim()
+      const normalizedInput = normalizeCommandInput(userInput)
       setInput('')
       setLoading(true)
 
       // Add user input to history
       setHistory(prev => [...prev, {
         type: 'input',
-        content: userInput,
+        content: normalizedInput,
         cwd: cwd,
         timestamp: new Date().toISOString()
       }])
-
-      // Check if it's a direct command (ls, cd, pwd) - execute directly without AI
-      const directCommands = ['ls', 'pwd', 'cd']
-      const commandWord = userInput.split(' ')[0]
-      const isDirectCommand = directCommands.includes(commandWord)
+      const isDirectCommand = isDirectShellCommand(normalizedInput)
 
       try {
         let response;
+        const controller = new AbortController()
+        activeRequestControllerRef.current = controller
         
         if (isDirectCommand) {
           // Execute direct commands without AI processing
           response = await axios.post(
             `${API_CONFIG.BASE_URL}/terminal/execute`,
             {
-              command: userInput,
+              command: normalizedInput,
               cwd: cwd
             },
             {
               timeout: API_CONFIG.TIMEOUT,
+              signal: controller.signal,
               headers: {
                 'Content-Type': 'application/json'
               }
@@ -100,7 +153,7 @@ function App() {
           response = await axios.post(
             `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_RUN}`,
             {
-              input: userInput,
+              input: normalizedInput,
               execute: false,
               context: {
                 os: window.electronAPI?.platform || 'linux',
@@ -110,6 +163,7 @@ function App() {
             },
             {
               timeout: API_CONFIG.TIMEOUT,
+              signal: controller.signal,
               headers: {
                 'Content-Type': 'application/json'
               }
@@ -132,13 +186,27 @@ function App() {
         }])
       } catch (err) {
         console.error('Error calling API:', err)
-        const errorMessage = err.response?.data?.error || err.message || 'Failed to connect to backend'
+        if (err?.code === 'ERR_CANCELED') {
+          setHistory(prev => [...prev, {
+            type: 'error',
+            content: 'Command cancelled by user',
+            timestamp: new Date().toISOString()
+          }])
+          return
+        }
+        const errorMessage =
+          err.response?.data?.detail ||
+          err.response?.data?.error ||
+          (err.code === 'ECONNABORTED' ? 'Request timed out. Backend may be busy or unavailable.' : null) ||
+          err.message ||
+          'Failed to connect to backend'
         setHistory(prev => [...prev, {
           type: 'error',
           content: errorMessage,
           timestamp: new Date().toISOString()
         }])
       } finally {
+        activeRequestControllerRef.current = null
         setLoading(false)
       }
     }
@@ -152,6 +220,9 @@ function App() {
     // Handle Ctrl+C to cancel loading
     if (e.ctrlKey && e.key === 'c' && loading) {
       e.preventDefault()
+      if (activeRequestControllerRef.current) {
+        activeRequestControllerRef.current.abort()
+      }
       setLoading(false)
     }
   }
@@ -211,6 +282,10 @@ function App() {
 
             {entry.type === 'output' && (
               <div className="ml-4 mt-1 space-y-1.5 text-sm">
+                {(() => {
+                  const execOutput = getExecutionOutput(entry.content.execution_result)
+                  return (
+                    <>
                 <div className="flex items-baseline gap-2">
                   <span className="text-green-700 text-xs">→</span>
                   <code className="text-green-400 font-bold">{entry.content.command}</code>
@@ -223,14 +298,14 @@ function App() {
                 {/* Display command execution output */}
                 {entry.content.execution_result && (
                   <div className="ml-4 mt-2">
-                    {entry.content.execution_result.stdout && (
+                    {execOutput.stdout && (
                       <pre className="text-green-400 whitespace-pre-wrap break-words text-xs">
-                        {entry.content.execution_result.stdout}
+                        {execOutput.stdout}
                       </pre>
                     )}
-                    {entry.content.execution_result.stderr && (
+                    {execOutput.stderr && (
                       <pre className="text-red-400 whitespace-pre-wrap break-words text-xs">
-                        {entry.content.execution_result.stderr}
+                        {execOutput.stderr}
                       </pre>
                     )}
                   </div>
@@ -255,6 +330,9 @@ function App() {
                     ))}
                   </div>
                 )}
+                    </>
+                  )
+                })()}
               </div>
             )}
 

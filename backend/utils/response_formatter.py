@@ -29,7 +29,10 @@ class ResponseFormatter:
             warnings=data.get("warnings", []),
             status=data.get("status", "success"),
             execution_result=data.get("execution_result"),
-            new_cwd=data.get("new_cwd")
+            new_cwd=data.get("new_cwd"),
+            plan=data.get("plan"),
+            environment_validation=data.get("environment_validation"),
+            agent_state=data.get("agent_state")
         )
     
     @staticmethod

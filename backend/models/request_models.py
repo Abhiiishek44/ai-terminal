@@ -60,6 +60,9 @@ class TerminalResponse(BaseModel):
     status: str = Field(default="success", description="Operation status")
     execution_result: Optional[Dict[str, Any]] = Field(None, description="Execution result if executed")
     new_cwd: Optional[str] = Field(None, description="Updated current working directory")
+    plan: Optional[list[Dict[str, Any]]] = Field(None, description="Generated step-by-step execution plan")
+    environment_validation: Optional[Dict[str, str]] = Field(None, description="Detected tool validation status")
+    agent_state: Optional[Dict[str, Any]] = Field(None, description="Session state snapshot")
     
     class Config:
         json_schema_extra = {

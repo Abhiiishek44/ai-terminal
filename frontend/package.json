@@ -9,7 +9,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "electron": "electron .",
-    "electron:dev": "cross-env NODE_ENV=development electron .",
+  "electron:dev": "cross-env NODE_ENV=development GTK_USE_PORTAL=0 ELECTRON_OZONE_PLATFORM_HINT=x11 LIBVA_DRIVER_NAME=dummy electron --disable-gpu --disable-software-rasterizer --disable-accelerated-video-decode --use-gl=swiftshader --disable-features=VaapiVideoDecoder,VaapiVideoEncoder,AcceleratedVideoDecodeLinuxGL .",
     "start": "concurrently \"npm run dev\" \"wait-on http://localhost:5174 && npm run electron:dev\"",
     "package": "npm run build && electron-builder"
   },

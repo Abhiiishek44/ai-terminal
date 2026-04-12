@@ -5,6 +5,43 @@ const path = require('path');
 
 let mainWindow;
 
+function configureLinuxRuntime() {
+  if (process.platform !== 'linux') {
+    return;
+  }
+
+  // Keep Chromium's noisy Linux backend logs out of dev terminal output.
+  app.commandLine.appendSwitch('log-level', '3');
+  app.commandLine.appendSwitch('disable-logging');
+
+  // Prevent VAAPI/GPU initialization errors on systems without proper drivers.
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+  app.commandLine.appendSwitch('disable-accelerated-video-decode');
+  app.commandLine.appendSwitch('use-gl', 'swiftshader');
+
+  if (!process.env.LIBVA_DRIVER_NAME) {
+    process.env.LIBVA_DRIVER_NAME = 'dummy';
+  }
+
+  // Reduce Chromium media backend issues commonly seen on Linux desktop setups.
+  app.commandLine.appendSwitch(
+    'disable-features',
+    'VaapiVideoDecoder,VaapiVideoEncoder,UseChromeOSDirectVideoDecoder,UseChromeOSDirectVideoEncoder,UseOzonePlatform,WebRtcPipeWireCapturer,AcceleratedVideoDecodeLinuxGL'
+  );
+
+  // Avoid some portal/systemd DBus interactions that can fail in dev sessions.
+  if (!process.env.GTK_USE_PORTAL) {
+    process.env.GTK_USE_PORTAL = '0';
+  }
+  if (!process.env.ELECTRON_OZONE_PLATFORM_HINT) {
+    process.env.ELECTRON_OZONE_PLATFORM_HINT = 'x11';
+  }
+}
+
+configureLinuxRuntime();
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,

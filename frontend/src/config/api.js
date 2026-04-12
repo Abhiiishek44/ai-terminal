@@ -8,7 +8,7 @@ export const API_CONFIG = {
     TERMINAL_FIX: '/terminal/fix',
     HEALTH: '/terminal/health',
   },
-  TIMEOUT: 30000, // 30 seconds
+  TIMEOUT: 20000, // 20 seconds
 };
 
 export default API_CONFIG;

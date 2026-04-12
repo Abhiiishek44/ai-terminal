@@ -2,6 +2,7 @@
 
 from google.genai import Client
 from google.genai.types import GenerateContentConfig
+import asyncio
 import json
 import re
 import logging
@@ -27,7 +28,7 @@ class AIService:
            
         # Initialize client with API key
         self.client = Client(api_key=self.settings.gemini_api_key)
-        
+      
         logger.info(f"AIService initialized with model: {self.settings.gemini_model}")
     
     async def generate_command(self, user_input: str, context: Optional[Dict] = None) -> Dict:
@@ -46,15 +47,19 @@ class AIService:
             prompt = self._build_command_prompt(user_input, context)
             
             # Generate response using new API
-            response = self.client.models.generate_content(
-                model=self.settings.gemini_model,
-                contents=prompt,
-                config=GenerateContentConfig(
-                    temperature=0.3,
-                    top_p=0.95,
-                    top_k=40,
-                    max_output_tokens=2048,
-                )
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model=self.settings.gemini_model,
+                    contents=prompt,
+                    config=GenerateContentConfig(
+                        temperature=0.3,
+                        top_p=0.95,
+                        top_k=40,
+                        max_output_tokens=2048,
+                    )
+                ),
+                timeout=self.settings.ai_timeout_seconds,
             )
             
             # Parse response
@@ -66,6 +71,17 @@ class AIService:
             logger.info(f"Generated command for: '{user_input}' -> {result.get('command')}")
             return result
             
+        except asyncio.TimeoutError:
+            logger.error("AI generation timed out")
+            return {
+                "intent": "run_command",
+                "command": "echo 'Request timed out while contacting AI model'",
+                "explanation": "AI request timed out. Please retry with a shorter prompt.",
+                "technology": "system",
+                "safety": "caution",
+                "warnings": ["AI request timeout"],
+                "new_cwd": None,
+            }
         except Exception as e:
             logger.error(f"Error generating command: {str(e)}")
             raise
@@ -130,7 +146,7 @@ Output:
 
 Input: "change to documents folder"
 Output:
-{{execute
+{{
   "intent": "file_operation",
   "command": "cd ~/Documents",
   "explanation": "Change to Documents directory",
@@ -278,10 +294,31 @@ Return ONLY valid JSON, no additional text.
 """
         
         try:
-            response = self.model.generate_content(prompt)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model=self.settings.gemini_model,
+                    contents=prompt,
+                    config=GenerateContentConfig(
+                        temperature=0.2,
+                        top_p=0.95,
+                        top_k=40,
+                        max_output_tokens=1024,
+                    )
+                ),
+                timeout=self.settings.ai_timeout_seconds,
+            )
             result = self._parse_ai_response(response.text)
             logger.info(f"Generated fix for command: {failed_command}")
             return result
+        except asyncio.TimeoutError:
+            logger.error("AI suggest_fix timed out")
+            return {
+                "error_type": "network",
+                "explanation": "AI request timed out while generating a fix suggestion",
+                "corrected_command": failed_command,
+                "additional_steps": ["Retry request", "Check network connectivity"],
+            }
         except Exception as e:
             logger.error(f"Error generating fix: {str(e)}")
             return {

@@ -3,7 +3,7 @@
 import os
 import subprocess
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ class ExecutorService:
     Handles actual terminal command execution with directory management
     """
     
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, base_directory: Optional[str] = None):
         """
         Initialize executor service
         
@@ -22,7 +22,28 @@ class ExecutorService:
             dry_run: If True, commands won't actually execute
         """
         self.dry_run = dry_run
+        self.base_directory = os.path.abspath(base_directory or os.getcwd())
+        self.dangerous_patterns = [
+            r'rm\s+-rf\s+/',
+            r'rm\s+-rf\s+/\*',
+            r'dd\s+if=',
+            r'mkfs',
+            r'\bshutdown\b',
+            r':\(\)\{',
+        ]
         logger.info(f"ExecutorService initialized (dry_run={dry_run})")
+
+    def _normalize_cwd(self, cwd: Optional[str]) -> str:
+        if not cwd or cwd == '~' or cwd == '':
+            cwd = self.base_directory
+        cwd = os.path.abspath(os.path.expanduser(cwd))
+        if not os.path.exists(cwd):
+            return self.base_directory
+        return cwd
+
+    def _is_dangerous(self, command: str) -> bool:
+        import re
+        return any(re.search(pattern, command, re.IGNORECASE) for pattern in self.dangerous_patterns)
     
     def execute(self, command: str, cwd: Optional[str] = None) -> Dict:
         """
@@ -36,21 +57,33 @@ class ExecutorService:
             Execution result with stdout, stderr, exit code, and new_cwd
         """
         # Default to actual current working directory if no CWD provided
-        if not cwd or cwd == '~' or cwd == '':
-            cwd = os.getcwd()
-        else:
-            cwd = os.path.abspath(os.path.expanduser(cwd))
-        
-        if not os.path.exists(cwd):
-            cwd = os.getcwd()
+        cwd = self._normalize_cwd(cwd)
+
+        normalized_command = (command or "").strip()
+        if normalized_command == "cd..":
+            normalized_command = "cd .."
+        elif normalized_command.lower().startswith("cd.."):
+            normalized_command = normalized_command.replace("cd..", "cd ..", 1)
+
+        if self._is_dangerous(normalized_command):
+            return {
+                "success": False,
+                "executed": False,
+                "command": normalized_command,
+                "stdout": "",
+                "stderr": "Command blocked by safety policy",
+                "exit_code": 126,
+                "new_cwd": cwd,
+                "error": "blocked"
+            }
         
         try:
             # Handle 'pwd' command to show current directory
-            if command.strip() == 'pwd':
+            if normalized_command == 'pwd':
                 return {
                     "success": True,
                     "executed": True,
-                    "command": command,
+                    "command": normalized_command,
                     "stdout": cwd,
                     "stderr": "",
                     "exit_code": 0,
@@ -58,8 +91,8 @@ class ExecutorService:
                 }
             
             # Handle 'cd' command specially to change directory
-            if command.strip().startswith('cd '):
-                new_path = command.replace('cd ', '').strip()
+            if normalized_command.startswith('cd '):
+                new_path = normalized_command.replace('cd ', '').strip()
                 
                 # Handle special cases
                 if not new_path or new_path == '~':
@@ -76,7 +109,7 @@ class ExecutorService:
                     return {
                         "success": True,
                         "executed": True,
-                        "command": command,
+                        "command": normalized_command,
                         "stdout": "",
                         "stderr": "",
                         "exit_code": 0,
@@ -86,7 +119,7 @@ class ExecutorService:
                     return {
                         "success": False,
                         "executed": True,
-                        "command": command,
+                        "command": normalized_command,
                         "stdout": "",
                         "stderr": f"cd: no such file or directory: {new_path}",
                         "exit_code": 1,
@@ -99,7 +132,7 @@ class ExecutorService:
                     "success": True,
                     "executed": False,
                     "mode": "dry_run",
-                    "command": command,
+                    "command": normalized_command,
                     "stdout": "",
                     "stderr": "",
                     "exit_code": 0,
@@ -107,11 +140,11 @@ class ExecutorService:
                     "note": "Command not executed (dry-run mode)"
                 }
             
-            logger.info(f"Executing command: {command} in directory: {cwd}")
+            logger.info(f"Executing command: {normalized_command} in directory: {cwd}")
             
             # Execute command in the specified directory
             result = subprocess.run(
-                command,
+                normalized_command,
                 shell=True,
                 cwd=cwd,
                 capture_output=True,
@@ -122,7 +155,7 @@ class ExecutorService:
             return {
                 "success": result.returncode == 0,
                 "executed": True,
-                "command": command,
+                "command": normalized_command,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "exit_code": result.returncode,
@@ -130,11 +163,11 @@ class ExecutorService:
             }
             
         except subprocess.TimeoutExpired:
-            logger.error(f"Command timed out: {command}")
+            logger.error(f"Command timed out: {normalized_command}")
             return {
                 "success": False,
                 "executed": True,
-                "command": command,
+                "command": normalized_command,
                 "stdout": "",
                 "stderr": "Command timed out after 30 seconds",
                 "exit_code": -1,
@@ -146,10 +179,43 @@ class ExecutorService:
             return {
                 "success": False,
                 "executed": False,
-                "command": command,
+                "command": normalized_command,
                 "stdout": "",
                 "stderr": str(e),
                 "exit_code": -1,
                 "new_cwd": cwd,
                 "error": str(e)
             }
+
+    def execute_plan(self, steps: List[Dict], cwd: Optional[str] = None) -> Dict:
+        """
+        Execute planned steps sequentially with fail-fast behavior.
+        """
+        current_cwd = self._normalize_cwd(cwd)
+        results: List[Dict] = []
+
+        for step in steps:
+            command = step.get("command", "")
+            result = self.execute(command=command, cwd=current_cwd)
+            result["step_id"] = step.get("id")
+            result["step_kind"] = step.get("kind")
+            results.append(result)
+
+            if result.get("new_cwd"):
+                current_cwd = self._normalize_cwd(result["new_cwd"])
+
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "stopped_at_step": step.get("id"),
+                    "results": results,
+                    "new_cwd": current_cwd,
+                    "error": result.get("stderr", "Step execution failed"),
+                }
+
+        return {
+            "success": True,
+            "results": results,
+            "new_cwd": current_cwd,
+            "stopped_at_step": None,
+        }

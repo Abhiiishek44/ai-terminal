@@ -133,7 +133,7 @@ async def execute_direct(
             "execution_result": {
                 "stdout": result.get("stdout", ""),
                 "stderr": result.get("stderr", ""),
-                "return_code": result.get("return_code", 0)
+                "return_code": result.get("exit_code", 0)
             },
             "new_cwd": result.get("new_cwd", request.cwd),
             "is_safe": True,

@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_DEFAULT_EXECUTION_BASE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..")
+)
+
 class Settings(BaseSettings):
     """
     Application configuration settings
@@ -23,10 +27,12 @@ class Settings(BaseSettings):
     # Gemini AI Configuration
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    ai_timeout_seconds: int = int(os.getenv("AI_TIMEOUT_SECONDS", "30"))
     
     # Security Configuration
     allow_destructive_commands: bool = False
     max_command_length: int = 500
+    execution_base_dir: str = os.getenv("EXECUTION_BASE_DIR", _DEFAULT_EXECUTION_BASE_DIR)
     
     # Rate Limiting
     rate_limit_per_minute: int = 60

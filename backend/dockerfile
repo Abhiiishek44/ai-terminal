@@ -17,8 +17,8 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the core module
-COPY core ./core
+# Copy the core module from backend
+COPY backend/core ./core
 
 # Copy backend application files
 COPY backend/*.py ./

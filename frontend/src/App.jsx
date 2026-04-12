@@ -1,16 +1,46 @@
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import API_CONFIG from './config/api'
+import Navbar from './components/Navbar'
+import TerminalPanel from './components/TerminalPanel'
+import AIPanel from './components/AIPanel'
 import './App.css'
 
 function App() {
   const [input, setInput] = useState('')
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(false)
-  const [cwd, setCwd] = useState('') // Current working directory
+  const [cwd, setCwd] = useState('~')
+  const [theme, setTheme] = useState(() => localStorage.getItem('ai-terminal-theme') || 'dark')
+  const [connectionStatus, setConnectionStatus] = useState('connecting')
+  const [commandHistory, setCommandHistory] = useState([])
+  const [historyCursor, setHistoryCursor] = useState(-1)
+
   const terminalRef = useRef(null)
   const inputRef = useRef(null)
   const activeRequestControllerRef = useRef(null)
+
+  const runtimeStatus = loading
+    ? 'running'
+    : connectionStatus === 'connected'
+      ? 'idle'
+      : connectionStatus
+
+  const latestOutput = useMemo(
+    () => [...history].reverse().find((entry) => entry.type === 'output'),
+    [history]
+  )
+  const latestError = useMemo(
+    () => [...history].reverse().find((entry) => entry.type === 'error'),
+    [history]
+  )
+
+  const createEntry = (type, payload) => ({
+    id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    type,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  })
 
   const normalizeCommandInput = (value) => {
     const trimmed = value.trim()
@@ -33,36 +63,46 @@ function App() {
     return directCommands.includes(commandWord)
   }
 
-  const getExecutionOutput = (executionResult) => {
-    if (!executionResult) {
-      return { stdout: '', stderr: '' }
+  const normalizeResponse = (data, command) => ({
+    intent: data?.intent || 'run_command',
+    command: data?.command || command,
+    explanation: data?.explanation || 'Command executed',
+    safety: data?.safety || 'safe',
+    warnings: data?.warnings || [],
+    plan: data?.plan || [],
+    execution_result: data?.execution_result || null,
+    new_cwd: data?.new_cwd || cwd,
+  })
+
+  const copyToClipboard = async (content) => {
+    if (!content) return
+    try {
+      await navigator.clipboard.writeText(content)
+    } catch (error) {
+      setHistory((prev) => [
+        ...prev,
+        createEntry('error', { content: `Failed to copy: ${error.message}` }),
+      ])
     }
-
-    // Direct execute endpoint shape
-    if (typeof executionResult.stdout === 'string' || typeof executionResult.stderr === 'string') {
-      return {
-        stdout: executionResult.stdout || '',
-        stderr: executionResult.stderr || ''
-      }
-    }
-
-    // Planned execution shape: { success, results: [{ stdout, stderr, ... }] }
-    if (Array.isArray(executionResult.results)) {
-      const stdout = executionResult.results
-        .map(step => step?.stdout || '')
-        .filter(Boolean)
-        .join('\n')
-
-      const stderr = executionResult.results
-        .map(step => step?.stderr || '')
-        .filter(Boolean)
-        .join('\n')
-
-      return { stdout, stderr }
-    }
-
-    return { stdout: '', stderr: '' }
   }
+
+  const runHealthCheck = async () => {
+    try {
+      await axios.get(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.HEALTH}`, { timeout: 3000 })
+      setConnectionStatus('connected')
+    } catch {
+      setConnectionStatus('disconnected')
+    }
+  }
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+  }
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    localStorage.setItem('ai-terminal-theme', theme)
+  }, [theme])
 
   // Fetch initial CWD when component mounts
   useEffect(() => {
@@ -73,24 +113,28 @@ function App() {
           `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_EXECUTE}`,
           {
             command: 'pwd',
-            cwd: cwd
+            cwd: '~'
           }
         )
         
         // Set CWD from response or default to ~
-        console.log('Initial CWD response:', response.data)
         if (response.data?.new_cwd) {
           setCwd(response.data.new_cwd)
         } else {
           setCwd('~')
         }
+        setConnectionStatus('connected')
       } catch (err) {
         console.error('Failed to fetch initial CWD:', err)
         setCwd('~')
+        setConnectionStatus('disconnected')
       }
     }
     
     fetchInitialCwd()
+    runHealthCheck()
+    const interval = setInterval(runHealthCheck, 10000)
+    return () => clearInterval(interval)
   }, [])
 
   // Auto-scroll to bottom when history updates
@@ -100,121 +144,124 @@ function App() {
     }
   }, [history, loading])
 
-  // Focus input when clicking anywhere in terminal
-  const handleTerminalClick = () => {
-    inputRef.current?.focus()
-  }
-
   // Keep input focused
   useEffect(() => {
     inputRef.current?.focus()
   }, [loading])
 
-  const handleKeyDown = async (e) => {
-    if (e.key === 'Enter' && !loading && input.trim()) {
-      e.preventDefault()
-      const userInput = input.trim()
-      const normalizedInput = normalizeCommandInput(userInput)
-      setInput('')
-      setLoading(true)
+  const executeCommand = async () => {
+    if (loading || !input.trim()) return
 
-      // Add user input to history
-      setHistory(prev => [...prev, {
-        type: 'input',
-        content: normalizedInput,
-        cwd: cwd,
-        timestamp: new Date().toISOString()
-      }])
-      const isDirectCommand = isDirectShellCommand(normalizedInput)
+    const normalizedInput = normalizeCommandInput(input)
+    setInput('')
+    setLoading(true)
+    setConnectionStatus('running')
+    setCommandHistory((prev) => [...prev, normalizedInput])
+    setHistoryCursor(-1)
 
-      try {
-        let response;
-        const controller = new AbortController()
-        activeRequestControllerRef.current = controller
-        
-        if (isDirectCommand) {
-          // Execute direct commands without AI processing
-          response = await axios.post(
-            `${API_CONFIG.BASE_URL}/terminal/execute`,
-            {
-              command: normalizedInput,
-              cwd: cwd
+    setHistory((prev) => [...prev, createEntry('input', { content: normalizedInput, cwd })])
+    const isDirectCommand = isDirectShellCommand(normalizedInput)
+
+    try {
+      const controller = new AbortController()
+      activeRequestControllerRef.current = controller
+      let response
+
+      if (isDirectCommand) {
+        response = await axios.post(
+          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_EXECUTE}`,
+          { command: normalizedInput, cwd },
+          {
+            timeout: API_CONFIG.TIMEOUT,
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      } else {
+        response = await axios.post(
+          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_RUN}`,
+          {
+            input: normalizedInput,
+            execute: false,
+            context: {
+              os: window.electronAPI?.platform || 'linux',
+              shell: 'bash',
+              cwd,
             },
-            {
-              timeout: API_CONFIG.TIMEOUT,
-              signal: controller.signal,
-              headers: {
-                'Content-Type': 'application/json'
-              }
-            }
-          );
-        } else {
-          // Use AI for natural language commands
-          response = await axios.post(
-            `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TERMINAL_RUN}`,
-            {
-              input: normalizedInput,
-              execute: false,
-              context: {
-                os: window.electronAPI?.platform || 'linux',
-                shell: 'bash',
-                cwd: cwd
-              }
-            },
-            {
-              timeout: API_CONFIG.TIMEOUT,
-              signal: controller.signal,
-              headers: {
-                'Content-Type': 'application/json'
-              }
-            }
-          );
-        }
-        
-        console.log('API response:', response.data)
-        
-        // Update CWD if provided by backend
-        if (response.data.new_cwd) {
-          setCwd(response.data.new_cwd)
-        }
-        
-        // Add AI response to history
-        setHistory(prev => [...prev, {
-          type: 'output',
-          content: response.data,
-          timestamp: new Date().toISOString()
-        }])
-      } catch (err) {
-        console.error('Error calling API:', err)
-        if (err?.code === 'ERR_CANCELED') {
-          setHistory(prev => [...prev, {
-            type: 'error',
-            content: 'Command cancelled by user',
-            timestamp: new Date().toISOString()
-          }])
-          return
-        }
-        const errorMessage =
-          err.response?.data?.detail ||
-          err.response?.data?.error ||
-          (err.code === 'ECONNABORTED' ? 'Request timed out. Backend may be busy or unavailable.' : null) ||
-          err.message ||
-          'Failed to connect to backend'
-        setHistory(prev => [...prev, {
-          type: 'error',
-          content: errorMessage,
-          timestamp: new Date().toISOString()
-        }])
-      } finally {
-        activeRequestControllerRef.current = null
-        setLoading(false)
+          },
+          {
+            timeout: API_CONFIG.TIMEOUT,
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
       }
+
+      const normalizedResponse = normalizeResponse(response.data, normalizedInput)
+      if (normalizedResponse.new_cwd) {
+        setCwd(normalizedResponse.new_cwd)
+      }
+
+      setHistory((prev) => [...prev, createEntry('output', { content: normalizedResponse })])
+      setConnectionStatus('connected')
+    } catch (err) {
+      if (err?.code === 'ERR_CANCELED') {
+        setHistory((prev) => [...prev, createEntry('error', { content: 'Command cancelled by user' })])
+        return
+      }
+
+      const errorMessage =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        (err.code === 'ECONNABORTED' ? 'Request timed out. Backend may be busy or unavailable.' : null) ||
+        err.message ||
+        'Failed to connect to backend'
+      setHistory((prev) => [...prev, createEntry('error', { content: errorMessage })])
+      setConnectionStatus('disconnected')
+    } finally {
+      activeRequestControllerRef.current = null
+      setLoading(false)
+    }
+  }
+
+  const handleInputKeyDown = async (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      await executeCommand()
+      return
+    }
+
+    if (e.key === 'ArrowUp' && commandHistory.length) {
+      e.preventDefault()
+      const nextCursor = historyCursor < 0 ? commandHistory.length - 1 : Math.max(0, historyCursor - 1)
+      setHistoryCursor(nextCursor)
+      setInput(commandHistory[nextCursor] || '')
+      return
+    }
+
+    if (e.key === 'ArrowDown' && commandHistory.length) {
+      e.preventDefault()
+      if (historyCursor <= 0) {
+        setHistoryCursor(-1)
+        setInput('')
+        return
+      }
+      const nextCursor = historyCursor + 1
+      if (nextCursor >= commandHistory.length) {
+        setHistoryCursor(-1)
+        setInput('')
+        return
+      }
+      setHistoryCursor(nextCursor)
+      setInput(commandHistory[nextCursor] || '')
+      return
     }
 
     // Handle Ctrl+L to clear terminal
     if (e.ctrlKey && e.key === 'l') {
       e.preventDefault()
       setHistory([])
+      return
     }
 
     // Handle Ctrl+C to cancel loading
@@ -224,162 +271,42 @@ function App() {
         activeRequestControllerRef.current.abort()
       }
       setLoading(false)
-    }
-  }
-
-  const getSafetyColor = (level) => {
-    switch (level) {
-      case 'safe': return 'text-green-400'
-      case 'caution': return 'text-yellow-400'
-      case 'danger': return 'text-orange-400'
-      case 'blocked': return 'text-red-400'
-      default: return 'text-gray-400'
+      setConnectionStatus('idle')
     }
   }
 
   return (
-    <div className="h-screen bg-black text-green-400 flex flex-col font-mono overflow-hidden">
-      {/* Terminal Header */}
-      <header className="bg-black border-b border-green-900 px-4 py-2 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-2">
-          
-          <span className="ml-4 text-sm text-green-500">AI Terminal - bash</span>
-        </div>
-        <div className="text-xs text-green-700">
-          <span className="text-green-600">Ctrl+L</span> clear | <span className="text-green-600">Ctrl+C</span> cancel
-        </div>
-      </header>
+    <div className={`app-shell ${theme === 'dark' ? 'dark' : ''}`}>
+      <div className="relative min-h-screen bg-slate-100 px-4 py-4 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
+        <Navbar cwd={cwd} status={runtimeStatus} theme={theme} onToggleTheme={toggleTheme} />
 
-      {/* Terminal Area */}
-      <div 
-        ref={terminalRef}
-        onClick={handleTerminalClick}
-        className="flex-1 overflow-y-auto p-4 cursor-text relative"
-      >
-        {/* Welcome Message */}
-        {history.length === 0 && !loading && (
-          <div className="text-green-600 space-y-1 mb-4">
-            <p>AI Terminal v1.0.0</p>
-            <p className="text-green-700">Type natural language commands and press Enter.</p>
-            <p className="text-green-700 mt-2">Examples:</p>
-            <p className="text-green-500 ml-2">install fastapi</p>
-            <p className="text-green-500 ml-2">create a react app</p>
-            <p className="text-green-500 ml-2">list all python files</p>
-            <p className="text-green-700 mt-2">---</p>
-          </div>
-        )}
+        <main className="grid h-[calc(100vh-7.25rem)] grid-cols-1 gap-4 lg:grid-cols-[1.35fr_0.95fr]">
+          <TerminalPanel
+            history={history}
+            loading={loading}
+            cwd={cwd}
+            input={input}
+            setInput={setInput}
+            onSubmit={(e) => {
+              e.preventDefault()
+              executeCommand()
+            }}
+            onInputKeyDown={handleInputKeyDown}
+            inputRef={inputRef}
+            terminalRef={terminalRef}
+            onCopyOutput={copyToClipboard}
+          />
 
-        {/* Terminal History */}
-        {history.map((entry, index) => (
-          <div key={index} className="mb-3">
-            {entry.type === 'input' && (
-              <div className="flex items-start gap-2">
-                <span className="text-green-700 select-none">{entry.cwd || '~'}</span>
-                <span className="text-green-500 select-none">$</span>
-                <span className="text-green-400">{entry.content}</span>
-              </div>
-            )}
+          <AIPanel
+            latestOutput={latestOutput?.content}
+            latestError={latestError}
+            loading={loading}
+            onCopy={copyToClipboard}
+          />
+        </main>
 
-            {entry.type === 'output' && (
-              <div className="ml-4 mt-1 space-y-1.5 text-sm">
-                {(() => {
-                  const execOutput = getExecutionOutput(entry.content.execution_result)
-                  return (
-                    <>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-green-700 text-xs">→</span>
-                  <code className="text-green-400 font-bold">{entry.content.command}</code>
-                </div>
-                
-                <div className="ml-4 text-green-500">
-                  {entry.content.explanation}
-                </div>
-
-                {/* Display command execution output */}
-                {entry.content.execution_result && (
-                  <div className="ml-4 mt-2">
-                    {execOutput.stdout && (
-                      <pre className="text-green-400 whitespace-pre-wrap break-words text-xs">
-                        {execOutput.stdout}
-                      </pre>
-                    )}
-                    {execOutput.stderr && (
-                      <pre className="text-red-400 whitespace-pre-wrap break-words text-xs">
-                        {execOutput.stderr}
-                      </pre>
-                    )}
-                  </div>
-                )}
-
-                <div className="ml-4 flex gap-6 text-xs text-green-700">
-                  <span>intent: <span className="text-green-500">{entry.content.intent}</span></span>
-                  <span>safety: <span className={getSafetyColor(entry.content.safety_level)}>{entry.content.safety_level}</span></span>
-                </div>
-
-                {entry.content.warning && (
-                  <div className="ml-4 border-l-2 border-yellow-600 pl-2 py-1 text-yellow-500 text-xs">
-                    ⚠ {entry.content.warning}
-                  </div>
-                )}
-
-                {entry.content.alternative_commands?.length > 0 && (
-                  <div className="ml-4 mt-2 text-xs">
-                    <span className="text-green-700">alternatives:</span>
-                    {entry.content.alternative_commands.map((cmd, i) => (
-                      <div key={i} className="ml-2 text-green-600">• {cmd}</div>
-                    ))}
-                  </div>
-                )}
-                    </>
-                  )
-                })()}
-              </div>
-            )}
-
-            {entry.type === 'error' && (
-              <div className="ml-4 text-red-500 text-sm border-l-2 border-red-900 pl-2">
-                error: {entry.content}
-              </div>
-            )}
-          </div>
-        ))}
-
-        {/* Loading State */}
-        {loading && (
-          <div className="ml-4 flex items-center gap-2 text-green-600 text-sm">
-            <span className="animate-pulse">▮</span>
-            <span>processing...</span>
-          </div>
-        )}
-
-        {/* Active Input Line */}
-        {!loading && (
-          <div className="flex items-start gap-2">
-            <span className="text-green-700 select-none">{cwd}</span>
-            <span className="text-green-500 select-none">$</span>
-            <div className="flex-1 relative">
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="w-full bg-transparent border-none outline-none text-green-400 caret-green-400"
-                autoFocus
-                spellCheck={false}
-              />
-              {!input && (
-                <span className="absolute left-0 top-0 text-green-800 pointer-events-none select-none">
-                  type command here...
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-        
-        {/* Created by credit - bottom right */}
-        <div className="fixed bottom-4 right-4 text-xs text-green-800 pointer-events-none select-none">
-          Developed by Abhishek
+        <div className="pointer-events-none fixed bottom-4 right-5 text-[11px] text-slate-500 dark:text-slate-400">
+          Developed by Abhishek Kumbhar
         </div>
       </div>
     </div>

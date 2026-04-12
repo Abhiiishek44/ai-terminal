@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Gemini AI Configuration
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-    ai_timeout_seconds: int = int(os.getenv("AI_TIMEOUT_SECONDS", "30"))
+    ai_timeout_seconds: int = int(os.getenv("AI_TIMEOUT_SECONDS", "60"))
     
     # Security Configuration
     allow_destructive_commands: bool = False

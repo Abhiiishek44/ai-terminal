@@ -100,7 +100,7 @@ class ExecutorService:
                 }
             
             # Handle 'cd' command specially to change directory
-            if normalized_command.startswith('cd '):
+            if normalized_command.startswith('cd ') and '&&' not in normalized_command and ';' not in normalized_command:
                 new_path = normalized_command.replace('cd ', '').strip()
                 
                 # Handle special cases
@@ -152,23 +152,53 @@ class ExecutorService:
             logger.info(f"Executing command: {normalized_command} in directory: {cwd}")
             
             # Execute command in the specified directory
+            # For complex commands with && (like cd foo && do bar), 
+            # we need to capture the final directory if it changed successfully.
+            # We append a 'pwd' command to grab the final working directory.
+            cmd_with_pwd = f"{normalized_command} && pwd" if not normalized_command.endswith('& pwd') else normalized_command
+
+            # Auto-activate .venv if it exists in the current directory
+            env = os.environ.copy()
+            potential_venv_bin = os.path.join(cwd, ".venv", "bin")
+            if os.path.exists(potential_venv_bin):
+                env["PATH"] = f"{potential_venv_bin}:{env.get('PATH', '')}"
+                env["VIRTUAL_ENV"] = os.path.join(cwd, ".venv")
+
             result = subprocess.run(
-                normalized_command,
+                cmd_with_pwd,
                 shell=True,
                 cwd=cwd,
+                env=env,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=120
             )
+
+            stdout = result.stdout
+            final_cwd = cwd
+            
+            # If successful, the last line of stdout from `&& pwd` is our new CWD
+            if result.returncode == 0:
+                lines = stdout.rstrip('\r\n').split('\n')
+                if lines:
+                    potential_cwd = lines[-1].strip()
+                    if os.path.exists(potential_cwd) and os.path.isdir(potential_cwd):
+                        final_cwd = potential_cwd
+                        # Remove the pwd output from stdout
+                        stdout = '\n'.join(lines[:-1])
+                        if stdout: stdout += '\n'
+            elif result.returncode != 0 and '&& pwd' in cmd_with_pwd:
+                # Execution failed, the 'pwd' part never ran. Just return the stdout.
+                pass
             
             return {
                 "success": result.returncode == 0,
                 "executed": True,
                 "command": normalized_command,
-                "stdout": result.stdout,
+                "stdout": stdout,
                 "stderr": result.stderr,
                 "exit_code": result.returncode,
-                "new_cwd": cwd  # CWD stays same for non-cd commands
+                "new_cwd": final_cwd  # Capture actual path after chained commands
             }
             
         except subprocess.TimeoutExpired:
@@ -178,7 +208,7 @@ class ExecutorService:
                 "executed": True,
                 "command": normalized_command,
                 "stdout": "",
-                "stderr": "Command timed out after 30 seconds",
+                "stderr": "Command timed out after execution limit constraint. If this is `sudo`, it may be waiting for a password in a non-interactive shell.",
                 "exit_code": -1,
                 "new_cwd": cwd,
                 "error": "timeout"

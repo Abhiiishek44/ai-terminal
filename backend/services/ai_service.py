@@ -92,7 +92,9 @@ class AIService:
         context_info = ""
         if context:
             cwd = context.get('cwd', '~')
-            context_info = f"\n\nCONTEXT:\n- Current Working Directory: {cwd}\n- OS: {context.get('os', 'linux')}\n- Shell: {context.get('shell', 'bash')}"
+            has_venv = context.get('has_venv', False)
+            venv_note = "\n- A `.venv` virtual environment exists in the current directory, it will be automatically active for you." if has_venv else ""
+            context_info = f"\n\nCONTEXT:\n- Current Working Directory: {cwd}\n- OS: {context.get('os', 'linux')}\n- Shell: {context.get('shell', 'bash')}{venv_note}"
         
         prompt = f"""You are an AI Developer Terminal Assistant that converts human instructions into executable terminal commands.
 
@@ -124,7 +126,7 @@ Input: "install fastapi"
 Output:
 {{
   "intent": "install_package",
-  "command": "pip install fastapi",
+  "command": "python -m pip install fastapi",
   "explanation": "Install FastAPI Python web framework using pip",
   "technology": "python",
   "safety": "safe",
@@ -194,6 +196,12 @@ SAFETY RULES:
 - BLOCK: Modifications to /etc, /usr, /bin, /boot
 - WARN: Any destructive operations (rm -rf, format, etc.)
 - PREFER: Safe alternatives when possible
+
+VIRTUAL ENVIRONMENT RULES (CRITICAL):
+- Do NOT output `source .venv/bin/activate` or `. .venv/bin/activate`.
+- The shell executing these commands is a non-interactive `/bin/sh` which manages environments automatically via PATH injection.
+- Just output standard commands like `python script.py` or `python -m pip install fastapi`. You do NOT need to manually specify `./.venv/bin/python`.
+- IMPORTANT: When creating an environment `python -m venv .venv`, just output `python -m venv .venv` and subsequent commands will use the correctly injected path without you needing to do anything.
 
 Generate the JSON response for the user input above. Return ONLY valid JSON, no additional text.
 """

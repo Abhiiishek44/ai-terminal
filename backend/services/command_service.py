@@ -177,8 +177,8 @@ class CommandService:
                     {
                         "id": 5,
                         "kind": "install",
-                        "command": ". .venv/bin/activate && pip install pandas",
-                        "description": "Activate virtual environment and install pandas",
+                        "command": "python -m pip install pandas",
+                        "description": "Install pandas using virtual environment interpreter",
                         "requires": ["python3", "pip"],
                     },
                 ]
@@ -194,8 +194,8 @@ class CommandService:
 
                 return {
                     "intent": CommandIntent.SETUP_PROJECT,
-                    "command": ". .venv/bin/activate && pip install pandas",
-                    "explanation": "Created folder, created virtual environment, activated it, and installed pandas",
+                    "command": "python -m pip install pandas",
+                    "explanation": "Created folder, created virtual environment, and installed pandas using the venv Python interpreter",
                     "technology": "python",
                     "safety": SafetyLevel.SAFE,
                     "warnings": [],
@@ -211,15 +211,18 @@ class CommandService:
                 }
 
             # Generate command using AI
-            ai_context = {**context, "cwd": session.cwd}
+            import os
+            has_venv = os.path.exists(os.path.join(session.cwd, ".venv"))
+            ai_context = {**context, "cwd": session.cwd, "has_venv": has_venv}
             result = await self.ai_service.generate_command(normalized_input, ai_context)
             print(f"AI generated result: {result}")
             
             # Apply business rules
             result = self._apply_business_rules(result)
 
-            # If AI returned a command, pre-check it for dangerous patterns before building a plan
             ai_command = result.get("command", "")
+
+            # If AI returned a command, pre-check it for dangerous patterns before building a plan
             if ai_command and self.executor._is_dangerous(ai_command):
                 return _blocked_response_for(ai_command)
 

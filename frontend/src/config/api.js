@@ -8,7 +8,7 @@ export const API_CONFIG = {
     TERMINAL_FIX: '/terminal/fix',
     HEALTH: '/terminal/health',
   },
-  TIMEOUT: 20000, // 20 seconds
+  TIMEOUT: 45000, // Increased to 45 seconds to handle slower LLM API responses and system installations
 };
 
 export default API_CONFIG;

@@ -24,11 +24,20 @@ class ExecutorService:
         self.dry_run = dry_run
         self.base_directory = os.path.abspath(base_directory or os.getcwd())
         self.dangerous_patterns = [
-            r'rm\s+-rf\s+/',
-            r'rm\s+-rf\s+/\*',
+            r'(^|\s)(sudo\s+)?rm\s+-[a-zA-Z]*[rf][a-zA-Z]*\s+(/|\.|~|\$HOME|\$\{HOME\}|\*)',
+            r'(^|\s)(sudo\s+)?rm\s+--no-preserve-root',
             r'dd\s+if=',
             r'mkfs',
             r'\bshutdown\b',
+            r'\breboot\b',
+            r'\bpoweroff\b',
+            r'\bhalt\b',
+            r'\binit\s+0\b',
+            r':\(\)\{',
+            r'\bchmod\s+-R\s+777\s+/',
+            r'\bchown\s+-R\s+[^\s]+\s+/',
+            r'>\s*/dev/sd[a-z][0-9]*',
+            r'\bmkfs\.[a-z0-9]+\b',
             r':\(\)\{',
         ]
         logger.info(f"ExecutorService initialized (dry_run={dry_run})")

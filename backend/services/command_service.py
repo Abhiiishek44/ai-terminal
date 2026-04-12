@@ -54,6 +54,32 @@ class CommandService:
             session = self.state.get_or_create_session(session_id=session_id, cwd=requested_cwd)
             normalized_input = self._normalize_shell_command(user_input)
 
+            # Central dangerous-command check helper using ExecutorService patterns
+            def _blocked_response_for(command: str):
+                return {
+                    "intent": CommandIntent.RUN_COMMAND,
+                    "command": command,
+                    "explanation": "Command blocked by safety policy",
+                    "technology": "shell",
+                    "safety": SafetyLevel.DANGER,
+                    "warnings": ["Command blocked by safety policy"],
+                    "status": "blocked",
+                    "execution_result": {
+                        "success": False,
+                        "executed": False,
+                        "command": command,
+                        "stdout": "",
+                        "stderr": "Command blocked by safety policy",
+                        "exit_code": 126,
+                        "new_cwd": session.cwd,
+                    },
+                    "new_cwd": session.cwd,
+                    "plan": [],
+                    "environment_validation": {},
+                    "agent_state": self.state.get_state_snapshot(session_id),
+                }
+
+
             if self._is_smalltalk(normalized_input):
                 return {
                     "intent": CommandIntent.RUN_COMMAND,
@@ -87,6 +113,10 @@ class CommandService:
                 }
 
             if self._is_direct_shell_command(normalized_input):
+                # Pre-check dangerous patterns before executing
+                if self.executor._is_dangerous(normalized_input):
+                    return _blocked_response_for(normalized_input)
+
                 direct_execution = self.executor.execute(command=normalized_input, cwd=session.cwd)
                 new_cwd = direct_execution.get("new_cwd", session.cwd)
                 self.state.update_cwd(session_id, new_cwd)
@@ -95,9 +125,9 @@ class CommandService:
                     "command": normalized_input,
                     "explanation": "Executed shell command directly without AI planning",
                     "technology": "shell",
-                    "safety": SafetyLevel.SAFE,
+                    "safety": SafetyLevel.SAFE if direct_execution.get("success") else SafetyLevel.CAUTION,
                     "warnings": [],
-                    "status": "success" if direct_execution.get("success") else "error",
+                    "status": "blocked" if direct_execution.get("error") == "blocked" else ("success" if direct_execution.get("success") else "error"),
                     "execution_result": direct_execution,
                     "new_cwd": new_cwd,
                     "plan": [
@@ -153,6 +183,11 @@ class CommandService:
                     },
                 ]
 
+                # Pre-check plan steps for dangerous commands
+                for step in plan_payload:
+                    if self.executor._is_dangerous(step.get("command", "")):
+                        return _blocked_response_for(step.get("command", ""))
+
                 execution_result = self.executor.execute_plan(plan_payload, cwd=session.cwd)
                 new_cwd = execution_result.get("new_cwd", session.cwd)
                 self.state.update_cwd(session_id, new_cwd)
@@ -183,6 +218,11 @@ class CommandService:
             # Apply business rules
             result = self._apply_business_rules(result)
 
+            # If AI returned a command, pre-check it for dangerous patterns before building a plan
+            ai_command = result.get("command", "")
+            if ai_command and self.executor._is_dangerous(ai_command):
+                return _blocked_response_for(ai_command)
+
             # Build execution plan and validate deps in advance
             plan_steps = self.planner.build_plan(user_input=normalized_input, ai_command=result.get("command", ""))
             plan_payload = [
@@ -195,6 +235,11 @@ class CommandService:
                 }
                 for step in plan_steps
             ]
+
+            # Pre-check generated plan steps for dangerous commands
+            for step in plan_payload:
+                if self.executor._is_dangerous(step.get("command", "")):
+                    return _blocked_response_for(step.get("command", ""))
 
             execution_result = self.executor.execute_plan(plan_payload, cwd=session.cwd)
             result["execution_result"] = execution_result
@@ -218,7 +263,12 @@ class CommandService:
             result["agent_state"] = self.state.get_state_snapshot(session_id)
             result["environment_validation"] = env_status
             
-            result["status"] = "success"
+            if execution_result.get("error") == "blocked":
+                result["status"] = "blocked"
+                result["safety"] = SafetyLevel.DANGER
+                result.setdefault("warnings", []).append("Command blocked by safety policy")
+            else:
+                result["status"] = "success" if execution_result.get("success") else "error"
             logger.info(f"Processed command successfully: {normalized_input}")
             return result
             

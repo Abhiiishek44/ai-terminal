@@ -136,8 +136,8 @@ async def execute_direct(
                 "return_code": result.get("exit_code", 0)
             },
             "new_cwd": result.get("new_cwd", request.cwd),
-            "is_safe": True,
-            "requires_confirmation": False
+            "is_safe": result.get("error") != "blocked",
+            "requires_confirmation": result.get("error") == "blocked"
         }
         
     except Exception as e:

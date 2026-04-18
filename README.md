@@ -231,12 +231,6 @@ print(response.json())
 | `GEMINI_TEMPERATURE` | 0.3 | AI response randomness (0-1) |
 | `MAX_REQUESTS_PER_MINUTE` | 30 | Rate limiting |
 
-## 🤝 Contributing
-
-This is a production-ready backend. For enhancements:
-1. Add new command patterns in `ai_service.py`
-2. Extend validation in `command_service.py`
-3. Add new endpoints in `terminal_router.py`
 
 ## 📄 License
 
